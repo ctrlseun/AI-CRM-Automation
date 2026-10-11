@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from app.duplicate_detector import detect_duplicate
@@ -119,6 +120,12 @@ def create_database():
             cursor.execute("""
                 ALTER TABLE leads
                 ADD COLUMN action_completed_at TEXT
+            """)
+
+        if "follow_up_due_at" not in lead_columns:
+            cursor.execute("""
+                ALTER TABLE leads
+                ADD COLUMN follow_up_due_at TEXT
             """)
 
         cursor.execute("""
@@ -300,6 +307,49 @@ def insert_lead(lead):
         conn.close()
 
 
+def get_follow_up_due_at(follow_up_timing, now=None):
+    """
+    Calculate a follow-up due timestamp from the AI follow-up timing.
+
+    Supported timings:
+    - Within 24 hours
+    - Within 2-3 days
+    - Within 1 week
+
+    Unknown or empty timings return None.
+
+    The optional now parameter makes the calculation deterministic
+    for testing.
+    """
+
+    if now is None:
+        now = datetime.now()
+
+    if not isinstance(now, datetime):
+        raise TypeError("now must be a datetime.")
+
+    timing = str(
+        follow_up_timing or ""
+    ).strip().casefold()
+
+    if timing == "within 24 hours":
+        return (
+            now + timedelta(hours=24)
+        ).isoformat(timespec="seconds")
+
+    if timing == "within 2-3 days":
+        return (
+            now + timedelta(days=3)
+        ).isoformat(timespec="seconds")
+
+    if timing == "within 1 week":
+        return (
+            now + timedelta(days=7)
+        ).isoformat(timespec="seconds")
+
+    return None
+
+
 def save_lead_analysis(lead_id, analysis):
     """
     Save validated AI analysis results to an existing lead.
@@ -365,6 +415,14 @@ def save_lead_analysis(lead_id, analysis):
     if quantity is not None and quantity < 0:
         raise ValueError("AI quantity cannot be negative.")
 
+    follow_up_timing = str(
+        analysis.get("follow_up_timing") or ""
+    ).strip().casefold()
+
+    follow_up_due_at = get_follow_up_due_at(
+        follow_up_timing
+    )
+
     conn = get_connection()
 
     try:
@@ -394,7 +452,8 @@ def save_lead_analysis(lead_id, analysis):
                 lead_score = ?,
                 summary = ?,
                 recommended_action = ?,
-                follow_up_timing = ?
+                follow_up_timing = ?,
+                follow_up_due_at = ?
             WHERE id = ?
         """, (
             analysis.get("lead_type"),
@@ -407,6 +466,7 @@ def save_lead_analysis(lead_id, analysis):
             analysis.get("summary"),
             analysis.get("recommended_action"),
             analysis.get("follow_up_timing"),
+            follow_up_due_at,
             lead_id
         ))
 
@@ -1231,10 +1291,9 @@ def update_lead_status(lead_id, status):
         conn.close()
 
 
-
 def get_lead_action_status(lead_id):
     if not isinstance(lead_id, int) or lead_id <= 0:
-        raise ValueError("lead_id must be a positiveinteger.")
+        raise ValueError("lead_id must be a positive integer.")
 
     conn = get_connection()
 
@@ -1267,7 +1326,7 @@ def get_lead_action_status(lead_id):
 
 def update_lead_action_status(lead_id, action_status):
     if not isinstance(lead_id, int) or lead_id <= 0:
-        raise ValueError("lead_id must be a positiveinteger.")
+        raise ValueError("lead_id must be a positive integer.")
 
     action_status = str(action_status or "").strip().upper()
 
@@ -1300,8 +1359,6 @@ def update_lead_action_status(lead_id, action_status):
         if not lead:
             conn.rollback()
             return False
-
-        from datetime import datetime
 
         completed_at = (
             datetime.now().isoformat(timespec="seconds")
@@ -1346,6 +1403,111 @@ def update_lead_action_status(lead_id, action_status):
         conn.close()
 
 
+def get_follow_up_due_state(follow_up_due_at, now=None):
+    """
+    Return the current follow-up due state for a lead.
+
+    States:
+    - OVERDUE
+    - DUE TODAY
+    - UPCOMING
+    - NO DUE DATE
+    """
+
+    if not follow_up_due_at:
+        return "NO DUE DATE"
+
+    try:
+        due_at = datetime.fromisoformat(
+            str(follow_up_due_at)
+        )
+    except (TypeError, ValueError):
+        return "NO DUE DATE"
+
+    if now is None:
+        now = datetime.now()
+
+    if not isinstance(now, datetime):
+        raise TypeError("now must be a datetime.")
+
+    if due_at < now:
+        return "OVERDUE"
+
+    if due_at.date() == now.date():
+        return "DUE TODAY"
+
+    return "UPCOMING"
+
+
+def get_follow_up_due_info(follow_up_due_at, now=None):
+    """
+    Return detailed follow-up due information.
+
+    Result:
+    {
+        "state": "OVERDUE" | "DUE TODAY" | "UPCOMING" | "NO DUE DATE",
+        "days_remaining": int | None,
+        "days_overdue": int | None
+    }
+
+    Days are calculated using calendar dates.
+    """
+
+    if not follow_up_due_at:
+        return {
+            "state": "NO DUE DATE",
+            "days_remaining": None,
+            "days_overdue": None
+        }
+
+    try:
+        due_at = datetime.fromisoformat(
+            str(follow_up_due_at)
+        )
+    except (TypeError, ValueError):
+        return {
+            "state": "NO DUE DATE",
+            "days_remaining": None,
+            "days_overdue": None
+        }
+
+    if now is None:
+        now = datetime.now()
+
+    if not isinstance(now, datetime):
+        raise TypeError("now must be a datetime.")
+
+    if due_at < now:
+        days_overdue = max(
+            0,
+            (now.date() - due_at.date()).days
+        )
+
+        return {
+            "state": "OVERDUE",
+            "days_remaining": None,
+            "days_overdue": days_overdue
+        }
+
+    if due_at.date() == now.date():
+        return {
+            "state": "DUE TODAY",
+            "days_remaining": 0,
+            "days_overdue": None
+        }
+
+    days_remaining = max(
+        0,
+        (due_at.date() - now.date()).days
+    )
+
+    return {
+        "state": "UPCOMING",
+        "days_remaining": days_remaining,
+        "days_overdue": None
+    }
+
+
 def get_follow_up_queue(batch_id=None):
     """Return active lead actions that need follow-up."""
 
@@ -1363,6 +1525,7 @@ def get_follow_up_queue(batch_id=None):
                 lead_score,
                 recommended_action,
                 follow_up_timing,
+                follow_up_due_at,
                 action_status,
                 action_completed_at,
                 status
@@ -1405,9 +1568,16 @@ def get_follow_up_queue(batch_id=None):
         conn.close()
 
 
-
 def get_follow_up_metrics(batch_id=None):
-    """Return batch-scoped follow-up counts and completion rate."""
+    """
+    Return batch-scoped follow-up counts and completion rate.
+
+    Overdue count only includes active follow-up actions:
+    PENDING and IN PROGRESS.
+
+    Completed and skipped actions are not counted as overdue because
+    they no longer require active follow-up.
+    """
 
     if batch_id is not None:
         if not isinstance(batch_id, int) or batch_id <= 0:
@@ -1422,6 +1592,7 @@ def get_follow_up_metrics(batch_id=None):
             SELECT
                 UPPER(COALESCE(action_status, 'PENDING')),
                 UPPER(COALESCE(priority, 'LOW')),
+                follow_up_due_at,
                 COUNT(*)
             FROM leads
             WHERE recommended_action IS NOT NULL
@@ -1437,7 +1608,8 @@ def get_follow_up_metrics(batch_id=None):
         query += """
             GROUP BY
                 UPPER(COALESCE(action_status, 'PENDING')),
-                UPPER(COALESCE(priority, 'LOW'))
+                UPPER(COALESCE(priority, 'LOW')),
+                follow_up_due_at
         """
 
         cursor.execute(query, tuple(params))
@@ -1452,28 +1624,46 @@ def get_follow_up_metrics(batch_id=None):
             "high": 0,
             "medium": 0,
             "low": 0,
+            "overdue": 0,
             "completion_rate": 0.0,
         }
 
-        for action_status, priority, count in rows:
+        now = datetime.now()
+
+        for action_status, priority, follow_up_due_at, count in rows:
             count = int(count or 0)
+
             metrics["total"] += count
 
             if action_status == "PENDING":
                 metrics["pending"] += count
+
             elif action_status == "IN PROGRESS":
                 metrics["in_progress"] += count
+
             elif action_status == "COMPLETED":
                 metrics["completed"] += count
+
             elif action_status == "SKIPPED":
                 metrics["skipped"] += count
 
             if priority == "HIGH":
                 metrics["high"] += count
+
             elif priority == "MEDIUM":
                 metrics["medium"] += count
+
             elif priority == "LOW":
                 metrics["low"] += count
+
+            if action_status in {"PENDING", "IN PROGRESS"}:
+                due_info = get_follow_up_due_info(
+                    follow_up_due_at,
+                    now=now
+                )
+
+                if due_info["state"] == "OVERDUE":
+                    metrics["overdue"] += count
 
         eligible_actions = (
             metrics["total"] - metrics["skipped"]
@@ -1489,6 +1679,7 @@ def get_follow_up_metrics(batch_id=None):
 
     finally:
         conn.close()
+
 
 def get_leads_by_status(status):
     status = str(status or "").strip().upper()
@@ -1873,14 +2064,6 @@ def get_crm_intelligence_report(batch_id=None):
 
         # ---------------------------------------------------------
         # AI ANALYSIS
-        # ---------------------------------------------------------
-        #
-        # IMPORTANT:
-        # A lead is "AI analyzed" only when all core AI fields
-        # required by the CRM intelligence layer are populated.
-        #
-        # quantity and timeline are intentionally excluded because
-        # they are allowed to be None.
         # ---------------------------------------------------------
 
         ai_complete_condition = """

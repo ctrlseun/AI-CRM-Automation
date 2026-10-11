@@ -23,6 +23,7 @@ from app.database import (
     update_lead_action_status,
     get_follow_up_queue,
     get_follow_up_metrics,
+    get_follow_up_due_state,
 )
 
 from app.lead_analyzer import analyze_lead
@@ -1063,10 +1064,15 @@ def render_follow_up_queue(queue):
             lead_score,
             recommended_action,
             follow_up_timing,
+            follow_up_due_at,
             action_status,
             action_completed_at,
             lead_status,
         ) = row
+
+        follow_up_due_state = get_follow_up_due_state(
+            follow_up_due_at
+        )
 
         priority_text = str(
             priority or "LOW"
@@ -1125,6 +1131,11 @@ def render_follow_up_queue(queue):
                                 "Not specified"
                             )
                         )}
+                    </div>
+
+                    <div class="opportunity-detail">
+                        <strong>Due status</strong><br>
+                        {escape(follow_up_due_state)}
                     </div>
 
                     <div class="opportunity-priority {badge_class}">
@@ -6274,6 +6285,7 @@ if session_result is not None:
                         lead_score,
                         recommended_action,
                         follow_up_timing,
+                        follow_up_due_at,
                         action_status,
                         action_completed_at,
                         lead_status,
