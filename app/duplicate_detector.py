@@ -14,10 +14,19 @@ def normalize_for_comparison(value):
     - hyphens
     - dots
     - capitalization differences
+
+    Missing values are treated as empty.
     """
 
     if value is None:
         return ""
+
+    # Handle pandas/NumPy-style NaN without requiring pandas here.
+    try:
+        if value != value:
+            return ""
+    except (TypeError, ValueError):
+        pass
 
     return (
         str(value)
@@ -198,13 +207,15 @@ def calculate_confidence(scores):
         )
 
     # --------------------------------------------------------
-    # STRONG NAME + COMPANY MATCH
+    # NAME + COMPANY MATCH
     # --------------------------------------------------------
+    # Same name + company is not enough to automatically
+    # classify a lead as a confirmed duplicate.
 
     if name >= 90 and company >= 90:
 
         return (
-            "HIGH",
+            "MEDIUM",
             "Strong name and company match"
         )
 

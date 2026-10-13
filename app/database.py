@@ -591,8 +591,7 @@ def import_clean_leads(
         raise ValueError("source_file is required.")
 
     clean_rows = clean_dataframe[
-        (clean_dataframe["validation_status"] == "CLEAN") &
-        (clean_dataframe["duplicate_status"] == "UNIQUE")
+        clean_dataframe["validation_status"] == "CLEAN"
     ].copy()
 
     conn = get_connection()
