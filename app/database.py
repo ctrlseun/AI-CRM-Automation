@@ -647,15 +647,20 @@ def import_clean_leads(
 
         batch_id = cursor.lastrowid
 
+        # Only compare incoming leads against existing CRM records
+        # belonging to the same client. Client data must remain isolated.
         cursor.execute("""
             SELECT
-                id,
-                name,
-                email,
-                phone,
-                company
-            FROM leads
-        """)
+                l.id,
+                l.name,
+                l.email,
+                l.phone,
+                l.company
+            FROM leads l
+            LEFT JOIN import_batches b
+                ON l.import_batch_id = b.id
+            WHERE b.client_name = ?
+        """, (client_name,))
 
         existing_leads = cursor.fetchall()
 
@@ -707,17 +712,22 @@ def import_clean_leads(
                 skipped_count += 1
                 continue
 
+            # Exact email duplicates must also be checked only
+            # within the same client's CRM records.
             cursor.execute("""
                 SELECT
-                    id,
-                    name,
-                    email,
-                    phone,
-                    company
-                FROM leads
-                WHERE LOWER(TRIM(email)) = LOWER(TRIM(?))
+                    l.id,
+                    l.name,
+                    l.email,
+                    l.phone,
+                    l.company
+                FROM leads l
+                LEFT JOIN import_batches b
+                    ON l.import_batch_id = b.id
+                WHERE b.client_name = ?
+                  AND LOWER(TRIM(l.email)) = LOWER(TRIM(?))
                 LIMIT 1
-            """, (email,))
+            """, (client_name, email))
 
             existing_by_email = cursor.fetchone()
 
