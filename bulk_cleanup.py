@@ -20,6 +20,8 @@ from app.duplicate_detector import (
 from app.database import (
     import_clean_leads,
     get_connection,
+    get_follow_up_queue,
+    get_follow_up_due_info,
 )
 
 from app.lead_analyzer import (
@@ -1955,43 +1957,29 @@ def create_client_delivery_package(
         ├── CRM Intelligence Report.html
         ├── CRM Intelligence Report.txt
         ├── Cleaned Dataset.csv
+        ├── Follow-up Queue.csv
         └── Delivery Summary.txt
 
-    The package is generated from the actual cleanup
-    run and the CRM intelligence report.
+    All CRM intelligence and follow-up data is scoped to the
+    current CRM batch.
     """
 
     print("\n========================================")
     print("       CLIENT DELIVERY PACKAGE")
     print("========================================")
 
-    delivery_directory = (
-        run_directory / "CLIENT_DELIVERY"
-    )
+    delivery_directory = run_directory / "CLIENT_DELIVERY"
 
     delivery_directory.mkdir(
         parents=True,
         exist_ok=True
     )
 
-    # ------------------------------------
-    # GET BATCH ID
-    # ------------------------------------
-
-    batch_id = database_result.get(
-        "batch_id"
-    )
+    batch_id = database_result.get("batch_id")
 
     if not batch_id:
-
-        print(
-            "\nNo CRM batch ID available."
-        )
-
-        print(
-            "Intelligence report generation skipped."
-        )
-
+        print("\nNo CRM batch ID available.")
+        print("Intelligence report generation skipped.")
         return None
 
     # ------------------------------------
@@ -1999,10 +1987,7 @@ def create_client_delivery_package(
     # ------------------------------------
 
     try:
-
-        report_result = generate_client_report(
-            batch_id
-        )
+        report_result = generate_client_report(batch_id)
 
         txt_report = Path(
             report_result["txt_path"]
@@ -2011,10 +1996,6 @@ def create_client_delivery_package(
         html_report = Path(
             report_result["html_path"]
         )
-
-        # --------------------------------
-        # COPY + RENAME REPORTS
-        # --------------------------------
 
         delivery_html = (
             delivery_directory
@@ -2036,20 +2017,15 @@ def create_client_delivery_package(
             delivery_txt
         )
 
-        print(
-            "\nCRM Intelligence Report generated."
-        )
+        print("\nCRM Intelligence Report generated.")
 
     except Exception as error:
-
         print(
             "\nWARNING: CRM Intelligence Report "
             "could not be generated."
         )
 
-        print(
-            f"Error: {error}"
-        )
+        print(f"Error: {error}")
 
         delivery_html = None
         delivery_txt = None
@@ -2069,6 +2045,127 @@ def create_client_delivery_package(
     )
 
     # ------------------------------------
+    # EXPORT BATCH-SCOPED FOLLOW-UP QUEUE
+    # ------------------------------------
+
+    follow_up_file = (
+        delivery_directory
+        / "Follow-up Queue.csv"
+    )
+
+    follow_up_rows = []
+
+    try:
+        follow_up_queue = get_follow_up_queue(
+            batch_id=batch_id
+        )
+
+        for row in follow_up_queue:
+            (
+                lead_id,
+                name,
+                company,
+                priority,
+                lead_score,
+                recommended_action,
+                follow_up_timing,
+                follow_up_due_at,
+                action_status,
+                action_completed_at,
+                status,
+            ) = row
+
+            due_info = get_follow_up_due_info(
+                follow_up_due_at
+            )
+
+            follow_up_rows.append({
+                "Lead ID": lead_id,
+                "Name": name or "",
+                "Company": company or "",
+                "Priority": priority or "LOW",
+                "Lead Score": lead_score if lead_score is not None else "",
+                "Recommended Action": recommended_action or "",
+                "Follow-up Timing": follow_up_timing or "",
+                "Follow-up Due At": follow_up_due_at or "",
+                "Due State": due_info["state"],
+                "Days Remaining": (
+                    due_info["days_remaining"]
+                    if due_info["days_remaining"] is not None
+                    else ""
+                ),
+                "Days Overdue": (
+                    due_info["days_overdue"]
+                    if due_info["days_overdue"] is not None
+                    else ""
+                ),
+                "Action Status": action_status or "PENDING",
+                "CRM Status": status or "",
+                "Action Completed At": action_completed_at or "",
+            })
+
+        follow_up_dataframe = pd.DataFrame(
+            follow_up_rows,
+            columns=[
+                "Lead ID",
+                "Name",
+                "Company",
+                "Priority",
+                "Lead Score",
+                "Recommended Action",
+                "Follow-up Timing",
+                "Follow-up Due At",
+                "Due State",
+                "Days Remaining",
+                "Days Overdue",
+                "Action Status",
+                "CRM Status",
+                "Action Completed At",
+            ],
+        )
+
+        follow_up_dataframe.to_csv(
+            follow_up_file,
+            index=False
+        )
+
+        print(
+            f"\nFollow-up Queue generated: "
+            f"{len(follow_up_dataframe)} active action(s)."
+        )
+
+    except Exception as error:
+        print(
+            "\nWARNING: Follow-up Queue could not be generated."
+        )
+
+        print(f"Error: {error}")
+
+        # Always leave a valid CSV artifact so the delivery
+        # package structure remains predictable.
+        pd.DataFrame(
+            columns=[
+                "Lead ID",
+                "Name",
+                "Company",
+                "Priority",
+                "Lead Score",
+                "Recommended Action",
+                "Follow-up Timing",
+                "Follow-up Due At",
+                "Due State",
+                "Days Remaining",
+                "Days Overdue",
+                "Action Status",
+                "CRM Status",
+                "Action Completed At",
+            ]
+        ).to_csv(
+            follow_up_file,
+            index=False
+        )
+
+    # ------------------------------------
     # COPY DELIVERY SUMMARY
     # ------------------------------------
 
@@ -2086,20 +2183,14 @@ def create_client_delivery_package(
     # ADD DELIVERY PACKAGE INFORMATION
     # ------------------------------------
 
-    package_readme = (
-        delivery_directory
-        / "Delivery Summary.txt"
-    )
-
     with open(
-        package_readme,
+        delivery_summary_file,
         "a",
         encoding="utf-8"
     ) as file:
 
         file.write(
             f"""
-
 ============================================================
                  CLIENT DELIVERY PACKAGE
 ============================================================
@@ -2132,6 +2223,10 @@ A text version of the CRM intelligence report.
 Cleaned Dataset.csv
 Clean + unique records ready for CRM use.
 
+Follow-up Queue.csv
+Batch-scoped active follow-up actions including priority,
+recommended action, timing, due state, and action status.
+
 Delivery Summary.txt
 Summary of the cleanup process, quality results,
 and recommended next steps.
@@ -2142,6 +2237,9 @@ IMPORTANT
 
 Confirmed duplicates and records requiring manual review
 are intentionally excluded from the cleaned dataset.
+
+Follow-up Queue.csv contains only active follow-up actions
+from CRM Batch ID {batch_id}.
 
 The system does not automatically delete or merge
 customer records.
@@ -2157,42 +2255,39 @@ customer records.
     # DISPLAY PACKAGE
     # ------------------------------------
 
-    print(
-        "\nClient delivery package created:"
-    )
+    print("\nDelivery package ready:")
+    print(delivery_directory)
 
-    print(
-        f"\n{delivery_directory}"
-    )
-
-    print("\nFiles:")
-
-    print(
-        "- CRM Intelligence Report.html"
-    )
-
-    print(
-        "- CRM Intelligence Report.txt"
-    )
-
-    print(
-        "- Cleaned Dataset.csv"
-    )
-
-    print(
-        "- Delivery Summary.txt"
-    )
-
-    print("\n========================================")
+    for item in sorted(delivery_directory.iterdir()):
+        if item.is_file():
+            print(
+                f"  - {item.name} "
+                f"({item.stat().st_size:,} bytes)"
+            )
 
     return {
-        "directory": delivery_directory,
-        "html_report": delivery_html,
-        "txt_report": delivery_txt,
-        "cleaned_dataset": cleaned_dataset_file,
-        "delivery_summary": delivery_summary_file,
+        "directory": str(delivery_directory),
+        "html_report": (
+            str(delivery_html)
+            if delivery_html
+            else None
+        ),
+        "txt_report": (
+            str(delivery_txt)
+            if delivery_txt
+            else None
+        ),
+        "cleaned_dataset": str(
+            cleaned_dataset_file
+        ),
+        "follow_up_queue": str(
+            follow_up_file
+        ),
+        "delivery_summary": str(
+            delivery_summary_file
+        ),
+        "batch_id": batch_id,
     }
-
 
 # ========================================
 # EXPORT RESULTS

@@ -5588,173 +5588,345 @@ if session_result is not None:
         ai_result,
         dict,
     ):
-
         ai_result = {}
 
-    ai_attempted = safe_int(
+    # ------------------------------------
+    # NEW AI ANALYSIS
+    # ------------------------------------
+
+    new_ai_leads = safe_int(
         ai_result.get(
             "total",
             0,
         )
     )
 
-    ai_completed = safe_int(
+    new_ai_completed = safe_int(
         ai_result.get(
             "analyzed",
             0,
         )
     )
 
-    ai_failed = safe_int(
+    new_ai_failed = safe_int(
         ai_result.get(
             "failed",
             0,
         )
     )
 
-    # Include explicit AI re-analysis in the displayed run metrics.
+    # Actual NVIDIA API usage from the concurrent
+    # new-analysis pipeline.
+    new_ai_api_attempts = safe_int(
+        ai_result.get(
+            "api_attempts",
+            0,
+        )
+    )
+
+    new_ai_retries = safe_int(
+        ai_result.get(
+            "retries",
+            0,
+        )
+    )
+
+    new_ai_retried_leads = safe_int(
+        ai_result.get(
+            "retried_leads",
+            0,
+        )
+    )
+
+    # ------------------------------------
+    # AI RE-ANALYSIS
+    # ------------------------------------
+
     ai_reanalysis = session_result.get(
         "ai_reanalysis",
-        result.get("ai_reanalysis", {}),
+        result.get(
+            "ai_reanalysis",
+            {},
+        ),
     )
-    if not isinstance(ai_reanalysis, dict):
+
+    if not isinstance(
+        ai_reanalysis,
+        dict,
+    ):
         ai_reanalysis = {}
 
     reanalysis_attempted = safe_int(
-        ai_reanalysis.get("total", 0)
+        ai_reanalysis.get(
+            "total",
+            0,
+        )
     )
+
     reanalysis_completed = safe_int(
-        ai_reanalysis.get("analyzed", 0)
+        ai_reanalysis.get(
+            "analyzed",
+            0,
+        )
     )
+
     reanalysis_failed = safe_int(
-        ai_reanalysis.get("failed", 0)
+        ai_reanalysis.get(
+            "failed",
+            0,
+        )
     )
 
-    ai_attempted += reanalysis_attempted
-    ai_completed += reanalysis_completed
-    ai_failed += reanalysis_failed
+    # ------------------------------------
+    # INTERNAL COMPATIBILITY TOTALS
+    # ------------------------------------
+    #
+    # Other parts of the dashboard still use these
+    # variables to decide whether intelligence exists.
+    #
+    # Keep them as lead-operation totals only.
+    # They are NOT used as the NVIDIA API usage metric.
 
+    ai_attempted = (
+        new_ai_leads
+        + reanalysis_attempted
+    )
+
+    ai_completed = (
+        new_ai_completed
+        + reanalysis_completed
+    )
+
+    ai_failed = (
+        new_ai_failed
+        + reanalysis_failed
+    )
+
+    total_ai_operations = (
+        ai_attempted
+    )
+
+    total_ai_completed = (
+        ai_completed
+    )
+
+    total_ai_failed = (
+        ai_failed
+    )
+
+    # ------------------------------------
+    # AI STATUS
+    # ------------------------------------
+
+    if total_ai_operations == 0:
+
+        st.html(
+            """
+            <div class="dashboard-card">
+
+                <div class="dashboard-card-title">
+                    AI intelligence
+                </div>
+
+                <div class="dashboard-card-value">
+                    Existing intelligence reused
+                </div>
+
+                <div class="dashboard-card-description">
+                    No new AI analysis was required for this run.
+                </div>
+
+            </div>
+            """
+        )
+
+    elif total_ai_failed > 0:
+
+        st.html(
+            """
+            <div class="dashboard-card">
+
+                <div class="dashboard-card-title">
+                    AI intelligence
+                </div>
+
+                <div class="dashboard-card-value">
+                    Partially completed
+                </div>
+
+                <div class="dashboard-card-description">
+                    Some CRM records were analyzed successfully,
+                    while others require retry or review.
+                </div>
+
+            </div>
+            """
+        )
+
+    else:
+
+        st.html(
+            """
+            <div class="dashboard-card">
+
+                <div class="dashboard-card-title">
+                    AI intelligence
+                </div>
+
+                <div class="dashboard-card-value">
+                    Analysis complete
+                </div>
+
+                <div class="dashboard-card-description">
+                    AI intelligence was successfully generated
+                    for the CRM records processed in this run.
+                </div>
+
+            </div>
+            """
+        )
+
+
+    # ====================================
+    # AI USAGE REPORTING
+    # ====================================
 
     st.html(
         """
         <div class="section-title">
-            AI intelligence
+            AI usage
         </div>
         """
     )
 
-    ai_status_col, ai_metrics_col = (
-        st.columns(
-            [0.8, 1.2]
-        )
+
+    # ====================================
+    # NEW AI ANALYSIS
+    # ====================================
+
+    st.markdown(
+        "#### New AI analysis"
     )
 
-    with ai_status_col:
+    new_col1, new_col2, new_col3 = st.columns(3)
 
-        if ai_attempted == 0:
+    with new_col1:
 
-            st.html(
-                """
-                <div class="dashboard-card">
-
-                    <div class="dashboard-card-title">
-                        AI analysis
-                    </div>
-
-                    <div class="dashboard-card-value">
-                        Existing CRM intelligence
-                    </div>
-
-                    <div class="dashboard-card-description">
-                        Existing CRM intelligence was reused for this run.
-                        Enable re-analysis above when you want fresh NVIDIA AI results.
-                    </div>
-
-                </div>
-                """
-            )
-
-        elif ai_failed > 0:
-
-            st.html(
-                """
-                <div class="dashboard-card">
-
-                    <div class="dashboard-card-title">
-                        AI analysis
-                    </div>
-
-                    <div class="dashboard-card-value">
-                        Partial
-                    </div>
-
-                    <div class="dashboard-card-description">
-                        Some records were analyzed successfully,
-                        while others require another attempt.
-                    </div>
-
-                </div>
-                """
-            )
-
-        else:
-
-            st.html(
-                """
-                <div class="dashboard-card">
-
-                    <div class="dashboard-card-title">
-                        AI analysis
-                    </div>
-
-                    <div class="dashboard-card-value">
-                        Complete
-                    </div>
-
-                    <div class="dashboard-card-description">
-                        AI intelligence was successfully generated
-                        for the processed CRM records.
-                    </div>
-
-                </div>
-                """
-            )
-
-    with ai_metrics_col:
-
-        ai_col1, ai_col2, ai_col3 = (
-            st.columns(3)
+        st.metric(
+            "Leads analyzed",
+            new_ai_leads,
         )
 
-        with ai_col1:
+    with new_col2:
+
+        st.metric(
+            "Completed",
+            new_ai_completed,
+        )
+
+    with new_col3:
+
+        st.metric(
+            "Failed",
+            new_ai_failed,
+        )
+
+
+    # ====================================
+    # AI RE-ANALYSIS
+    # ====================================
+
+    if (
+        reanalysis_attempted > 0
+        or reanalysis_completed > 0
+        or reanalysis_failed > 0
+    ):
+
+        st.markdown(
+            "#### AI re-analysis"
+        )
+
+        re_col1, re_col2, re_col3 = st.columns(3)
+
+        with re_col1:
 
             st.metric(
-                "Attempted",
-                ai_attempted,
+                "Re-analyzed",
+                reanalysis_attempted,
             )
 
-        with ai_col2:
+        with re_col2:
 
             st.metric(
                 "Completed",
-                ai_completed,
+                reanalysis_completed,
             )
 
-        with ai_col3:
+        with re_col3:
 
             st.metric(
                 "Failed",
-                ai_failed,
+                reanalysis_failed,
             )
 
-    if ai_failed > 0:
 
-        st.warning(
-            "Some AI analyses failed. "
-            "The affected CRM leads remain stored safely "
-            "and can be analyzed again later."
+    # ====================================
+    # NVIDIA API USAGE
+    # ====================================
+
+    if (
+        new_ai_api_attempts > 0
+        or new_ai_retries > 0
+        or new_ai_retried_leads > 0
+    ):
+
+        st.markdown(
+            "#### NVIDIA API usage — new analysis"
         )
 
+        api_col1, api_col2, api_col3 = st.columns(3)
+
+        with api_col1:
+
+            st.metric(
+                "API attempts",
+                new_ai_api_attempts,
+            )
+
+        with api_col2:
+
+            st.metric(
+                "Retries",
+                new_ai_retries,
+            )
+
+        with api_col3:
+
+            st.metric(
+                "Leads retried",
+                new_ai_retried_leads,
+            )
+
+
+    # ------------------------------------
+    # FAILURE DETAILS
+    # ------------------------------------
+
+    if new_ai_failed > 0:
+
+        st.warning(
+            f"{new_ai_failed} new AI analysis "
+            f"operation(s) failed. Review the "
+            f"processing output and retry if needed."
+        )
+
+    if reanalysis_failed > 0:
+
+        st.warning(
+            f"{reanalysis_failed} AI re-analysis "
+            f"operation(s) failed. Retry the affected "
+            f"records if necessary."
+        )
 
     # ====================================
     # CRM INTELLIGENCE DASHBOARD
@@ -6682,6 +6854,12 @@ if session_result is not None:
             )
         )
 
+        follow_up_queue_path = (
+            delivery_package.get(
+                "follow_up_queue"
+            )
+        )
+
         st.html(
             """
             <div class="section-title">
@@ -6783,6 +6961,28 @@ if session_result is not None:
                             "Delivery Summary.txt"
                         ),
                         mime="text/plain",
+                        width="stretch",
+                    )
+
+            if (
+                follow_up_queue_path
+                and Path(
+                    follow_up_queue_path
+                ).exists()
+            ):
+
+                with open(
+                    follow_up_queue_path,
+                    "rb",
+                ) as file:
+
+                    st.download_button(
+                        "Download Follow-up Queue",
+                        data=file.read(),
+                        file_name=(
+                            "Follow-up Queue.csv"
+                        ),
+                        mime="text/csv",
                         width="stretch",
                     )
 
