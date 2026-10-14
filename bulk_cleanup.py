@@ -1,3 +1,5 @@
+import zipfile
+import os
 import pandas as pd
 import phonenumbers
 import shutil
@@ -74,6 +76,12 @@ def sanitize_folder_name(value):
 
     value = " ".join(value.split())
     value = value.replace(" ", "_")
+
+    # Prevent special filesystem directory names.
+    value = value.strip(" ._")
+
+    if not value or value in {".", ".."}:
+        return "Unnamed"
 
     return value[:100]
 
@@ -1688,7 +1696,7 @@ def import_clean_records_to_database(
 # BULK AI LEAD ANALYSIS
 # ========================================
 
-AI_MAX_WORKERS = 2
+AI_MAX_WORKERS = int(os.getenv("AI_MAX_WORKERS", "20"))
 
 
 def _analyze_single_imported_lead(lead):
@@ -2252,6 +2260,63 @@ customer records.
         )
 
     # ------------------------------------
+    # CREATE DELIVERY ZIP
+    # ------------------------------------
+
+    safe_client_name = sanitize_folder_name(
+        client_name
+    )
+
+    safe_dataset_name = sanitize_folder_name(
+        dataset_name
+    )
+
+    zip_filename = (
+        f"{safe_client_name}_"
+        f"{safe_dataset_name}_"
+        f"CRM_Delivery.zip"
+    )
+
+    zip_path = (
+        run_directory
+        / zip_filename
+    )
+
+    try:
+        with zipfile.ZipFile(
+            zip_path,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=6,
+        ) as archive:
+
+            for item in sorted(
+                delivery_directory.iterdir()
+            ):
+
+                if not item.is_file():
+                    continue
+
+                archive.write(
+                    item,
+                    arcname=item.name,
+                )
+
+        print(
+            f"\\nDelivery ZIP created: {zip_path}"
+        )
+
+    except Exception as error:
+
+        print(
+            "\\nWARNING: Delivery ZIP could not be created."
+        )
+
+        print(f"Error: {error}")
+
+        zip_path = None
+
+    # ------------------------------------
     # DISPLAY PACKAGE
     # ------------------------------------
 
@@ -2285,6 +2350,11 @@ customer records.
         ),
         "delivery_summary": str(
             delivery_summary_file
+        ),
+        "zip_package": (
+            str(zip_path)
+            if zip_path
+            else None
         ),
         "batch_id": batch_id,
     }

@@ -570,35 +570,116 @@ def request_ai_analysis(prompt):
                 result = response.json()
 
             except ValueError:
-                raise RuntimeError(
+                last_error = RuntimeError(
                     "NVIDIA API returned an invalid JSON response."
                 )
 
+                if attempt < MAX_API_ATTEMPTS:
+                    print(
+                        "Temporary invalid NVIDIA API response."
+                    )
+                    print(
+                        f"Retrying in {RETRY_DELAY_SECONDS} seconds..."
+                    )
+
+                    _ai_usage.retries += 1
+                    time.sleep(RETRY_DELAY_SECONDS)
+                    continue
+
+                raise last_error
+
             # --------------------------------------
-            # Validate choices
+            # Validate choices/content
             # --------------------------------------
 
-            if "choices" not in result:
-                raise RuntimeError(
-                    "NVIDIA API response does not contain 'choices'."
+            if (
+                not isinstance(result, dict)
+                or "choices" not in result
+                or not isinstance(result["choices"], list)
+                or not result["choices"]
+            ):
+                last_error = RuntimeError(
+                    "NVIDIA API returned no usable choices."
                 )
 
-            if not result["choices"]:
-                raise RuntimeError(
-                    "NVIDIA API returned an empty choices list."
+                if attempt < MAX_API_ATTEMPTS:
+                    print(
+                        "Temporary incomplete NVIDIA API response."
+                    )
+                    print(
+                        f"Retrying in {RETRY_DELAY_SECONDS} seconds..."
+                    )
+
+                    _ai_usage.retries += 1
+                    time.sleep(RETRY_DELAY_SECONDS)
+                    continue
+
+                raise last_error
+
+            first_choice = result["choices"][0]
+
+            if not isinstance(first_choice, dict):
+                last_error = RuntimeError(
+                    "NVIDIA API returned an invalid choice."
                 )
 
-            message = result["choices"][0].get(
-                "message",
-                {},
-            )
+                if attempt < MAX_API_ATTEMPTS:
+                    print(
+                        "Temporary incomplete NVIDIA API response."
+                    )
+                    print(
+                        f"Retrying in {RETRY_DELAY_SECONDS} seconds..."
+                    )
+
+                    _ai_usage.retries += 1
+                    time.sleep(RETRY_DELAY_SECONDS)
+                    continue
+
+                raise last_error
+
+            message = first_choice.get("message")
+
+            if not isinstance(message, dict):
+                last_error = RuntimeError(
+                    "NVIDIA API returned an invalid message."
+                )
+
+                if attempt < MAX_API_ATTEMPTS:
+                    print(
+                        "Temporary incomplete NVIDIA API response."
+                    )
+                    print(
+                        f"Retrying in {RETRY_DELAY_SECONDS} seconds..."
+                    )
+
+                    _ai_usage.retries += 1
+                    time.sleep(RETRY_DELAY_SECONDS)
+                    continue
+
+                raise last_error
 
             content = message.get("content")
 
-            if not content:
-                raise RuntimeError(
+            if not isinstance(content, str) or not content.strip():
+                last_error = RuntimeError(
                     "NVIDIA API returned empty content."
                 )
+
+                if attempt < MAX_API_ATTEMPTS:
+                    print(
+                        "Temporary empty NVIDIA API response."
+                    )
+                    print(
+                        f"Retrying in {RETRY_DELAY_SECONDS} seconds..."
+                    )
+
+                    _ai_usage.retries += 1
+                    time.sleep(RETRY_DELAY_SECONDS)
+                    continue
+
+                raise last_error
+
+            content = content.strip()
 
             print(
                 "NVIDIA API response received successfully."

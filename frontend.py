@@ -4855,13 +4855,34 @@ if uploaded_file is not None:
 
         file_bytes = uploaded_file.getvalue()
 
-        st.session_state.uploaded_file_bytes = (
-            file_bytes
-        )
+        # Application-level protection against unexpectedly
+        # large uploads being loaded entirely into memory.
+        MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
-        st.session_state.uploaded_filename = (
-            uploaded_file.name
-        )
+        if len(file_bytes) > MAX_UPLOAD_BYTES:
+            st.session_state.uploaded_file_bytes = None
+            st.session_state.uploaded_filename = None
+
+            st.error(
+                "CSV is too large. Maximum upload size is 25 MB."
+            )
+
+        elif not file_bytes:
+            st.session_state.uploaded_file_bytes = None
+            st.session_state.uploaded_filename = None
+
+            st.error(
+                "The uploaded CSV is empty."
+            )
+
+        else:
+            st.session_state.uploaded_file_bytes = (
+                file_bytes
+            )
+
+            st.session_state.uploaded_filename = (
+                uploaded_file.name
+            )
 
     except Exception as error:
 
@@ -6860,6 +6881,12 @@ if session_result is not None:
             )
         )
 
+        zip_package_path = (
+            delivery_package.get(
+                "zip_package"
+            )
+        )
+
         st.html(
             """
             <div class="section-title">
@@ -6985,6 +7012,36 @@ if session_result is not None:
                         mime="text/csv",
                         width="stretch",
                     )
+
+        if (
+            zip_package_path
+            and Path(
+                zip_package_path
+            ).exists()
+        ):
+
+            st.html(
+                """
+                <div class="section-title">
+                    Complete delivery
+                </div>
+                """
+            )
+
+            with open(
+                zip_package_path,
+                "rb",
+            ) as file:
+
+                st.download_button(
+                    "Download Complete CRM Package",
+                    data=file.read(),
+                    file_name=Path(
+                        zip_package_path
+                    ).name,
+                    mime="application/zip",
+                    width="stretch",
+                )
 
         with st.expander(
             "View delivery location",
