@@ -2,6 +2,8 @@ import pandas as pd
 import phonenumbers
 import shutil
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from pathlib import Path
 from datetime import datetime
 from phonenumbers import NumberParseException
@@ -22,6 +24,7 @@ from app.database import (
 
 from app.lead_analyzer import (
     analyze_and_save_lead,
+    get_ai_usage,
 )
 
 from app.crm_report import (
@@ -1683,14 +1686,74 @@ def import_clean_records_to_database(
 # BULK AI LEAD ANALYSIS
 # ========================================
 
+AI_MAX_WORKERS = 2
+
+
+def _analyze_single_imported_lead(lead):
+    """
+    Analyze one imported lead.
+
+    Each call performs its own AI request and its own
+    SQLite save through analyze_and_save_lead().
+    """
+
+    lead_id = lead[0]
+
+    lead_data = {
+        "name": lead[1],
+        "email": lead[2],
+        "phone": lead[3],
+        "company": lead[4],
+        "message": lead[5],
+        "status": lead[6],
+    }
+
+    try:
+        analysis = analyze_and_save_lead(
+            lead_id,
+            lead_data
+        )
+
+        usage = get_ai_usage()
+
+        return {
+            "lead_id": lead_id,
+            "name": lead_data["name"],
+            "company": lead_data["company"],
+            "success": True,
+            "analysis": analysis,
+            "attempts": usage["attempts"],
+            "retries": usage["retries"],
+            "error": None,
+        }
+
+    except Exception as error:
+        usage = get_ai_usage()
+
+        return {
+            "lead_id": lead_id,
+            "name": lead_data["name"],
+            "company": lead_data["company"],
+            "success": False,
+            "analysis": None,
+            "attempts": usage["attempts"],
+            "retries": usage["retries"],
+            "error": str(error),
+        }
+
+
 def analyze_imported_leads(
     batch_id,
     client_name,
     dataset_name
 ):
     """
-    Run AI analysis on all leads imported by
-    the current cleanup batch.
+    Run concurrent AI analysis on all leads imported
+    by the current cleanup batch.
+
+    AI requests run concurrently using a controlled
+    worker pool. Each lead remains independently
+    isolated so one failure does not stop the batch.
     """
 
     print("\n========================================")
@@ -1698,11 +1761,7 @@ def analyze_imported_leads(
     print("========================================")
 
     if not batch_id:
-
-        print(
-            "\nNo batch ID available."
-        )
-
+        print("\nNo batch ID available.")
         return {
             "total": 0,
             "analyzed": 0,
@@ -1712,9 +1771,7 @@ def analyze_imported_leads(
     conn = get_connection()
 
     try:
-
         cursor = conn.cursor()
-
         cursor.execute(
             """
             SELECT
@@ -1731,15 +1788,11 @@ def analyze_imported_leads(
             """,
             (batch_id,)
         )
-
         imported_leads = cursor.fetchall()
-
     finally:
-
         conn.close()
 
     total = len(imported_leads)
-
     analyzed = 0
     failed = 0
 
@@ -1748,122 +1801,123 @@ def analyze_imported_leads(
         f"{total}"
     )
 
-    if total == 0:
+    print(
+        f"AI workers: {AI_MAX_WORKERS}"
+    )
 
+    if total == 0:
         print(
             "\nNo newly imported leads require AI analysis."
         )
-
         return {
             "total": 0,
             "analyzed": 0,
             "failed": 0,
         }
 
-    for position, lead in enumerate(
-        imported_leads,
-        start=1
-    ):
+    print("\nStarting concurrent AI analysis...")
 
-        lead_id = lead[0]
+    with ThreadPoolExecutor(
+        max_workers=AI_MAX_WORKERS
+    ) as executor:
 
-        lead_data = {
-            "name": lead[1],
-            "email": lead[2],
-            "phone": lead[3],
-            "company": lead[4],
-            "message": lead[5],
-            "status": lead[6],
+        futures = {
+            executor.submit(
+                _analyze_single_imported_lead,
+                lead
+            ): position
+            for position, lead in enumerate(
+                imported_leads,
+                start=1
+            )
         }
 
-        print("\n----------------------------------------")
+        completed = 0
+        api_attempts = 0
+        retries = 0
+        retried_leads = 0
 
-        print(
-            f"AI Analysis {position}/{total}"
-        )
+        for future in as_completed(futures):
+            position = futures[future]
+            completed += 1
 
-        print(
-            f"Lead ID: {lead_id}"
-        )
+            result = future.result()
 
-        print(
-            f"Name: {lead_data['name']}"
-        )
+            api_attempts += result.get("attempts", 0)
+            retries += result.get("retries", 0)
 
-        print(
-            f"Company: {lead_data['company']}"
-        )
+            if result.get("retries", 0) > 0:
+                retried_leads += 1
 
-        try:
+            lead_id = result["lead_id"]
+            name = result["name"]
+            company = result["company"]
 
-            analyze_and_save_lead(
-                lead_id,
-                lead_data
-            )
-
-            analyzed += 1
-
+            print("\n----------------------------------------")
             print(
-                "\nAI analysis saved successfully."
+                f"AI Analysis completed "
+                f"{completed}/{total}"
             )
+            print(f"Original position: {position}")
+            print(f"Lead ID: {lead_id}")
+            print(f"Name: {name}")
+            print(f"Company: {company}")
 
-        except Exception as error:
-
-            failed += 1
-
-            print(
-                "\nAI analysis failed."
-            )
-
-            print(
-                f"Lead ID: {lead_id}"
-            )
-
-            print(
-                f"Error: {error}"
-            )
-
-            print(
-                "Lead remains safely stored in the CRM."
-            )
+            if result["success"]:
+                analyzed += 1
+                print(
+                    "AI analysis saved successfully."
+                )
+            else:
+                failed += 1
+                print(
+                    "AI analysis failed."
+                )
+                print(
+                    f"Error: {result['error']}"
+                )
+                print(
+                    "Lead remains safely stored "
+                    "in the CRM."
+                )
 
     print("\n========================================")
     print("        BULK AI ANALYSIS RESULT")
     print("========================================")
-
     print(
         f"\nClient: {client_name}"
     )
-
     print(
         f"Dataset: {dataset_name}"
     )
-
     print(
         f"Total imported leads: {total}"
     )
-
     print(
         f"Successfully analyzed: {analyzed}"
     )
-
     print(
         f"AI analysis failed: {failed}"
     )
+    print(
+        f"Actual NVIDIA API attempts: {api_attempts}"
+    )
+    print(
+        f"Retries: {retries}"
+    )
+    print(
+        f"Leads retried: {retried_leads}"
+    )
 
     if failed > 0:
-
         print(
             "\nSome AI analyses failed."
         )
-
         print(
             "The affected leads remain safely stored "
             "in the CRM and can be analyzed again later."
         )
-
     else:
-
         print(
             "\nAll imported leads were analyzed successfully."
         )
@@ -1874,8 +1928,10 @@ def analyze_imported_leads(
         "total": total,
         "analyzed": analyzed,
         "failed": failed,
+        "api_attempts": api_attempts,
+        "retries": retries,
+        "retried_leads": retried_leads,
     }
-
 
 # ========================================
 # CLIENT DELIVERY PACKAGE

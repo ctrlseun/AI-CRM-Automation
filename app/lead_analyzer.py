@@ -2,6 +2,7 @@ import json
 import os
 import re
 import time
+import threading
 
 import requests
 from dotenv import load_dotenv
@@ -45,6 +46,23 @@ REQUIRED_FIELDS = [
 MAX_API_ATTEMPTS = 3
 API_TIMEOUT = 45
 RETRY_DELAY_SECONDS = 3
+
+
+# Per-thread AI usage tracking.
+# Each concurrent worker gets its own counters.
+_ai_usage = threading.local()
+
+
+def _reset_ai_usage():
+    _ai_usage.attempts = 0
+    _ai_usage.retries = 0
+
+
+def get_ai_usage():
+    return {
+        "attempts": getattr(_ai_usage, "attempts", 0),
+        "retries": getattr(_ai_usage, "retries", 0),
+    }
 
 
 # ==========================================
@@ -480,7 +498,11 @@ def request_ai_analysis(prompt):
 
     last_error = None
 
+    _reset_ai_usage()
+
     for attempt in range(1, MAX_API_ATTEMPTS + 1):
+
+        _ai_usage.attempts += 1
 
         try:
             print(
@@ -519,6 +541,8 @@ def request_ai_analysis(prompt):
                     print(
                         f"Retrying in {RETRY_DELAY_SECONDS} seconds..."
                     )
+
+                    _ai_usage.retries += 1
 
                     time.sleep(
                         RETRY_DELAY_SECONDS
@@ -595,6 +619,8 @@ def request_ai_analysis(prompt):
                     f"Retrying in {RETRY_DELAY_SECONDS} seconds..."
                 )
 
+                _ai_usage.retries += 1
+
                 time.sleep(
                     RETRY_DELAY_SECONDS
                 )
@@ -619,6 +645,8 @@ def request_ai_analysis(prompt):
                 print(
                     f"Retrying in {RETRY_DELAY_SECONDS} seconds..."
                 )
+
+                _ai_usage.retries += 1
 
                 time.sleep(
                     RETRY_DELAY_SECONDS
