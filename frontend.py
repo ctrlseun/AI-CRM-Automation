@@ -67,6 +67,24 @@ def safe_int(value, default=0):
         return default
 
 
+def safe_phone(value, default="—"):
+    """
+    Display phone numbers cleanly without pandas float artifacts.
+    """
+    if value is None:
+        return default
+
+    text = str(value).strip()
+
+    if not text or text.lower() in {"nan", "none", "nat"}:
+        return default
+
+    if text.endswith(".0") and text[:-2].isdigit():
+        text = text[:-2]
+
+    return text
+
+
 def safe_float(value, default=0.0):
     """Safely convert a value to a float."""
 
@@ -5199,6 +5217,24 @@ if session_result is not None:
     # KPI OVERVIEW
     # ====================================
 
+    if "duplicate_records_open" not in st.session_state:
+        st.session_state.duplicate_records_open = False
+
+    if "review_records_open" not in st.session_state:
+        st.session_state.review_records_open = False
+
+    def toggle_duplicate_records():
+        st.session_state.duplicate_records_open = (
+            not st.session_state.duplicate_records_open
+        )
+        st.session_state.review_records_open = False
+
+    def toggle_review_records():
+        st.session_state.review_records_open = (
+            not st.session_state.review_records_open
+        )
+        st.session_state.duplicate_records_open = False
+
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
@@ -5217,17 +5253,366 @@ if session_result is not None:
 
     with col3:
 
-        st.metric(
-            "Duplicate Records",
-            metrics["duplicate_records"],
+        st.button(
+            f"Duplicate Records\n{safe_int(metrics['duplicate_records'])}",
+            key="duplicate_records_button",
+            width="stretch",
+            on_click=toggle_duplicate_records,
         )
 
     with col4:
 
-        st.metric(
-            "Review Required",
-            metrics["possible_duplicate_records"],
+        st.button(
+            f"Review Required\n{safe_int(metrics['possible_duplicate_records'])}",
+            key="review_records_button",
+            width="stretch",
+            on_click=toggle_review_records,
         )
+
+    # ====================================
+    # DUPLICATE / REVIEW DETAILS
+    # ====================================
+
+    duplicate_dataframe = st.session_state.result.get(
+        "dataframe",
+        pd.DataFrame(),
+    )
+
+    if (
+        st.session_state.duplicate_records_open
+        and not duplicate_dataframe.empty
+    ):
+
+        st.subheader("Confirmed Duplicate Records")
+
+        duplicate_rows = duplicate_dataframe[
+            duplicate_dataframe["duplicate_status"] == "DUPLICATE"
+        ].copy()
+
+        if duplicate_rows.empty:
+
+            st.info("No confirmed duplicate records found.")
+
+        else:
+
+            shown_pairs = set()
+
+            for _, row in duplicate_rows.iterrows():
+
+                matched_index = safe_int(
+                    row.get(
+                        "matched_record_index",
+                        -1,
+                    ),
+                    -1,
+                )
+
+                current_index = safe_int(
+                    duplicate_dataframe.index[
+                        duplicate_dataframe.index == row.name
+                    ][0],
+                    -1,
+                )
+
+                if matched_index >= 0:
+
+                    pair_key = tuple(
+                        sorted(
+                            [
+                                current_index,
+                                matched_index,
+                            ]
+                        )
+                    )
+
+                    if pair_key in shown_pairs:
+                        continue
+
+                    shown_pairs.add(pair_key)
+
+                st.markdown(
+                    f"### Duplicate Group"
+                )
+
+                col_a, col_b = st.columns(2)
+
+                with col_a:
+
+                    st.markdown("**Incoming Record**")
+
+                    st.write(
+                        f"**Name:** {row.get('name', '—')}"
+                    )
+
+                    st.write(
+                        f"**Email:** {row.get('email', '—')}"
+                    )
+
+                    st.write(
+                        f"**Phone:** {safe_phone(row.get('phone'))}"
+                    )
+
+                    st.write(
+                        f"**Company:** {row.get('company', '—')}"
+                    )
+
+                with col_b:
+
+                    st.markdown("**Matched Existing Record**")
+
+                    if (
+                        matched_index >= 0
+                        and matched_index < len(duplicate_dataframe)
+                    ):
+
+                        matched_row = duplicate_dataframe.iloc[
+                            matched_index
+                        ]
+
+                        st.write(
+                            f"**Name:** {matched_row.get('name', '—')}"
+                        )
+
+                        st.write(
+                            f"**Email:** {matched_row.get('email', '—')}"
+                        )
+
+                        st.write(
+                            f"**Phone:** {safe_phone(matched_row.get('phone'))}"
+                        )
+
+                        st.write(
+                            f"**Company:** {matched_row.get('company', '—')}"
+                        )
+
+                    else:
+
+                        st.info(
+                            row.get(
+                                "matched_record",
+                                "Matched record unavailable",
+                            )
+                        )
+
+                st.markdown(
+                    f"**Confidence:** "
+                    f"{escape(str(row.get('duplicate_confidence', '—')))}"
+                )
+
+                st.markdown(
+                    f"**Reason:** "
+                    f"{escape(str(row.get('duplicate_reason', '—')))}"
+                )
+
+                st.markdown("**Match Scores**")
+
+                score_col1, score_col2, score_col3, score_col4 = st.columns(4)
+
+                with score_col1:
+                    st.metric(
+                        "Name",
+                        f"{safe_float(row.get('name_similarity', 0)):.0f}%"
+                    )
+
+                with score_col2:
+                    st.metric(
+                        "Company",
+                        f"{safe_float(row.get('company_similarity', 0)):.0f}%"
+                    )
+
+                with score_col3:
+                    st.metric(
+                        "Email",
+                        f"{safe_float(row.get('email_similarity', 0)):.0f}%"
+                    )
+
+                with score_col4:
+                    st.metric(
+                        "Phone",
+                        f"{safe_float(row.get('phone_similarity', 0)):.0f}%"
+                    )
+
+                st.divider()
+
+            st.caption(
+                f"{len(shown_pairs)} duplicate groups "
+                f"found across {len(duplicate_rows)} duplicate records."
+            )
+
+
+    if (
+        st.session_state.review_records_open
+        and not duplicate_dataframe.empty
+    ):
+
+        st.subheader("Records Requiring Review")
+
+        review_rows = duplicate_dataframe[
+            duplicate_dataframe["duplicate_status"] == "REVIEW"
+        ].copy()
+
+        if review_rows.empty:
+
+            st.info("No records require duplicate review.")
+
+        else:
+
+            shown_review_pairs = set()
+
+            for _, row in review_rows.iterrows():
+
+                matched_index = safe_int(
+                    row.get(
+                        "matched_record_index",
+                        -1,
+                    ),
+                    -1,
+                )
+
+                current_index = safe_int(
+                    row.name,
+                    -1,
+                )
+
+                if matched_index >= 0:
+
+                    pair_key = tuple(
+                        sorted(
+                            [
+                                current_index,
+                                matched_index,
+                            ]
+                        )
+                    )
+
+                    if pair_key in shown_review_pairs:
+                        continue
+
+                    shown_review_pairs.add(pair_key)
+
+                st.markdown("### Possible Duplicate")
+
+                col_a, col_b = st.columns(2)
+
+                with col_a:
+
+                    st.markdown("**Incoming Record**")
+
+                    st.write(
+                        f"**Name:** {row.get('name', '—')}"
+                    )
+
+                    st.write(
+                        f"**Email:** {row.get('email', '—')}"
+                    )
+
+                    st.write(
+                        f"**Phone:** {safe_phone(row.get('phone'))}"
+                    )
+
+                    st.write(
+                        f"**Company:** {row.get('company', '—')}"
+                    )
+
+                with col_b:
+
+                    st.markdown("**Possible Existing Match**")
+
+                    if (
+                        matched_index >= 0
+                        and matched_index < len(duplicate_dataframe)
+                    ):
+
+                        matched_row = duplicate_dataframe.iloc[
+                            matched_index
+                        ]
+
+                        st.write(
+                            f"**Name:** {matched_row.get('name', '—')}"
+                        )
+
+                        st.write(
+                            f"**Email:** {matched_row.get('email', '—')}"
+                        )
+
+                        st.write(
+                            f"**Phone:** {safe_phone(matched_row.get('phone'))}"
+                        )
+
+                        st.write(
+                            f"**Company:** {matched_row.get('company', '—')}"
+                        )
+
+                    else:
+
+                        st.info(
+                            row.get(
+                                "matched_record",
+                                "Possible matched record unavailable",
+                            )
+                        )
+
+                st.markdown(
+                    f"**Confidence:** "
+                    f"{escape(str(row.get('duplicate_confidence', '—')))}"
+                )
+
+                st.markdown(
+                    f"**Reason:** "
+                    f"{escape(str(row.get('duplicate_reason', '—')))}"
+                )
+
+                st.warning(
+                    "The system isn't certain. "
+                    "Please review this record before taking action."
+                )
+
+                st.markdown("**Match Scores**")
+
+                score_col1, score_col2, score_col3, score_col4 = st.columns(4)
+
+                with score_col1:
+
+                    st.metric(
+                        "Name",
+                        f"{safe_float(row.get('name_similarity', 0)):.0f}%"
+                    )
+
+                with score_col2:
+
+                    st.metric(
+                        "Company",
+                        f"{safe_float(row.get('company_similarity', 0)):.0f}%"
+                    )
+
+                with score_col3:
+
+                    st.metric(
+                        "Email",
+                        f"{safe_float(row.get('email_similarity', 0)):.0f}%"
+                    )
+
+                with score_col4:
+
+                    st.metric(
+                        "Phone",
+                        f"{safe_float(row.get('phone_similarity', 0)):.0f}%"
+                    )
+
+                st.divider()
+
+            group_count = len(shown_review_pairs)
+
+            group_label = (
+                "possible duplicate group"
+                if group_count == 1
+                else "possible duplicate groups"
+            )
+
+            st.caption(
+                f"{group_count} {group_label} "
+                f"found across {len(review_rows)} records requiring review."
+            )
 
 
     # ====================================

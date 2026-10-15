@@ -573,6 +573,7 @@ def detect_duplicates(dataframe):
     dataframe["duplicate_confidence"] = "UNIQUE"
     dataframe["duplicate_reason"] = ""
     dataframe["matched_record"] = ""
+    dataframe["matched_record_index"] = -1
 
     dataframe["name_similarity"] = 0.0
     dataframe["company_similarity"] = 0.0
@@ -684,6 +685,11 @@ def detect_duplicates(dataframe):
             ] = (
                 f"Record {match['index'] + 1}"
             )
+
+            dataframe.at[
+                index,
+                "matched_record_index"
+            ] = match["index"]
 
             dataframe.at[
                 index,
